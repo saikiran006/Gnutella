@@ -9,7 +9,8 @@ from dataclasses import dataclass, field
 import sys
 from logger import Logger
 from file_server import File_Server
-
+from typing import List
+import time
 
 
 MIN_CONNS = 3
@@ -23,7 +24,8 @@ class Message:
     message: str
     ttl: int
     port: int
-    file_server_port:int = field(default=0) 
+    file_server_ports:List[int] = field(default_factory=list)
+    file_size:int =field(default=0)
 
     def to_json(self):
         """ Convert the message object to JSON string. """
@@ -59,15 +61,15 @@ class GnutellaPeer:
         self.set_connection_limits()
         self.read_files_in_directory()
         print(self.files)
-        self.query_msg_ids=[]
+        self.query_msg_ids=set()
         log_file_path = self.directory+"/output.log"  # Specify your log file path
         self.logger = Logger(log_file_path)
 
         self.file_server=File_Server(directory=directory)
 
         # Redirect standard output to the logger
-        # sys.stdout = self.logger
-        # logger.write("logging started")
+        sys.stdout = self.logger
+        print("logging started")
 
     def read_files_in_directory(self):
         for filename in os.listdir(self.directory):
@@ -104,7 +106,7 @@ class GnutellaPeer:
         """ Print currently connected peers. """
         print("Currently connected peers:")
         for peer in self.peers.values():
-            print(peer)
+            print(str(peer.peer_port))
 
     async def start_server(self):
         server = await asyncio.start_server(self.handle_connection, '127.0.0.1', self.port)
@@ -242,45 +244,78 @@ class GnutellaPeer:
             await writer.wait_closed()
             del self.peers[port]  # Remove the peer from the dictionary using the port
         
-    async def handle_query(self,received_msg):
-        print(f"In handle_query: {received_msg}")
-        msg_id=received_msg.message_id
+    async def handle_query(self, received_msg):
+        print(f"In handle_query: Received message {received_msg}")
+        msg_id = received_msg.message_id
         file_name = received_msg.message
         TTL = received_msg.ttl
-        if(msg_id in self.query_msg_ids):
-            msg_obj = Message(message_id=self.get_message_id(), message_type="QueryFAIL", message=f"File '{file_name}' not found in the network", ttl=1, port=self.port)
-            serialized_msg = msg_obj.to_json().encode()
-            return serialized_msg
-        
-        self.query_msg_ids.append(msg_id)
-        # Check if the file is present in the local directory
-        if file_name in self.files:
-            print("File Found")
-            msg_obj = Message(message_id=self.get_message_id(),message_type="QueryHIT", message=f"File '{file_name}' found at port {self.file_server.port}", ttl=1, port=self.port, file_server_port=self.file_server.port)
-            serialized_msg = msg_obj.to_json().encode()
-            return serialized_msg
-        else:
-            print(f"File '{file_name}' not found locally. Checking TTL: {TTL}")
-            if TTL > 1:
-                # Decrease TTL and forward the query to connected peers
-                new_ttl = TTL - 1
-                # msg_obj = Message(message_type="Query", message=file_name, ttl=new_ttl, port=received_msg.port)
-                for peer_address in self.peers.keys():
-                    print(f"Forwarded query for '{file_name}' to peers with TTL={new_ttl}")
-                    response = await self.send_message(peer_address, "Query", file_name, new_ttl,message_id=msg_id)
-                    if(response.message_type=="QueryHIT"):
-                        return response.to_json().encode()
-                msg_obj = Message(message_id=self.get_message_id(), message_type="QueryFAIL", message=f"File '{file_name}' not found in the network", ttl=1, port=self.port)
-                serialized_msg = msg_obj.to_json().encode()
-                return serialized_msg
-                # No immediate response sent when forwarding the message
-            else:
-                # TTL is 0, respond with QUERY_FAIL
-                print(f"TTL for file '{file_name}' reached 0. Returning QUERY_FAIL.")
-                msg_obj = Message(message_id=self.get_message_id(),message_type="QueryFAIL", message=f"File '{file_name}' not found in the network", ttl=1, port=self.port)
-                serialized_msg = msg_obj.to_json().encode()
-                return serialized_msg
 
+        # Check if we've already processed this message
+        if msg_id in self.query_msg_ids:
+            print(f"Message {msg_id} already processed. Sending QueryFAIL.")
+            msg_obj = Message(
+                message_id=self.get_message_id(),
+                message_type="QueryFAIL",
+                message=f"File '{file_name}' not found in the network",
+                ttl=1,
+                port=self.port
+            )
+            return msg_obj.to_json().encode()
+
+        # Mark message ID as processed
+        self.query_msg_ids.add(msg_id)
+        peer_fs_ports = []
+        file_size = None
+
+        # Check if the file exists locally
+        if file_name in self.files:
+            print("File found locally.")
+            peer_fs_ports.append(self.file_server.port)
+            file_path = os.path.join(self.directory, file_name)
+            file_size = os.stat(file_path).st_size
+            print(f"Local file size: {file_size} bytes")
+        else:
+            print(f"File '{file_name}' not found locally. TTL remaining: {TTL}")
+
+        # Forward the query if TTL > 1
+        if TTL > 1:
+            new_ttl = TTL - 1
+            for peer_address in self.peers.keys():
+                if(peer_address == received_msg.port):
+                    continue
+                print(f"Forwarding query for '{file_name}' to peer {peer_address} with TTL={new_ttl}")
+                response = await self.send_message(peer_address, "Query", file_name, new_ttl, message_id=msg_id)
+
+                # Collect file server ports from peers with QueryHIT responses
+                if response.message_type == "QueryHIT":
+                    if file_size is None:
+                        file_size = response.file_size
+                    peer_fs_ports.extend(response.file_server_ports)
+
+        # Return QueryHIT if any file server has the file
+        if peer_fs_ports:
+            print(f"File '{file_name}' found on peers: {peer_fs_ports}")
+            msg_obj = Message(
+                message_id=self.get_message_id(),
+                message_type="QueryHIT",
+                message=f"File '{file_name}' found at peer file servers",
+                file_size=file_size,
+                ttl=1,
+                port=self.port
+            )
+            msg_obj.file_server_ports = peer_fs_ports
+            return msg_obj.to_json().encode()
+        else:
+            # No file found in network
+            print(f"File '{file_name}' not found in the network.")
+            msg_obj = Message(
+                message_id=self.get_message_id(),
+                message_type="QueryFAIL",
+                message=f"File '{file_name}' not found in the network",
+                ttl=1,
+                port=self.port
+            )
+            return msg_obj.to_json().encode()
 
     async def send_message(self, port, message_type, message, ttl, message_id=None):
         """ Add a structured message to the queue for a specific peer. """
@@ -303,18 +338,40 @@ class GnutellaPeer:
         response = await response_future
         return response
     
-    async def search_for_file(self,file_name):
+    async def search_for_file(self, file_name):
         for peer_port in self.peers.keys():
-            msg_obj = await self.send_message(peer_port, "Query", file_name, 2)
-            if(msg_obj.message_type=="QueryHIT"):
+            msg_obj = await self.send_message(peer_port, "Query", file_name, 5)
+            if msg_obj.message_type == "QueryHIT":
                 print(f"Query to {peer_port} successful {msg_obj}")
-                await self.download_file(file_name,msg_obj.file_server_port)
+                await self.parallel_download(file_name, msg_obj.file_server_ports, msg_obj.file_size)
                 break
             else:
                 print(f"Query to {peer_port} unsuccessful {msg_obj}")
 
-    async def download_file(self,file_name, port,):
+    async def parallel_download(self, file_name, file_server_ports, file_size):
+        download_tasks = []
+        num_chunks = len(file_server_ports)
+        base_chunk_size = file_size // num_chunks
+        remainder = file_size % num_chunks
+        next_chunk_start = 0
+
+        for i, port in enumerate(file_server_ports):
+            # Adjust the chunk size only for the last chunk if there's a remainder
+            chunk_size = base_chunk_size + (1 if i < remainder else 0)
+            
+            # Append the download task for this chunk
+            download_tasks.append(self.download_chunk(file_name, port, next_chunk_start, next_chunk_start + chunk_size))
+            
+            # Update the starting point for the next chunk
+            next_chunk_start += chunk_size
+
+        # Run all download tasks concurrently
+        await asyncio.gather(*download_tasks)
+
+
+    async def download_chunk(self, file_name, port, chunk_start, chunk_end):
         # Create output directory if it doesn't exist
+        print("fileName ", file_name)
         if not os.path.exists(self.directory):
             os.makedirs(self.directory)
 
@@ -323,22 +380,26 @@ class GnutellaPeer:
         # Connect to the file server
         reader, writer = await asyncio.open_connection(HOST, port)
 
-        # Request the file from the server
-        writer.write(file_name.encode())
+        # Request the chunk from the server
+        request_msg = f"{file_name},{chunk_start},{chunk_end}"
+        writer.write(request_msg.encode())
         await writer.drain()  # Ensure the request is sent
 
         # Open a file to write the downloaded content
         with open(output_file_path, 'wb') as output_file:
+            output_file.seek(chunk_start)
             while True:
                 data = await reader.read(1024)  # Read in chunks
                 if not data:
                     break
-                output_file.write(data)  # Write data to file
-                print(f"Received {len(data)} bytes.")
+                output_file.write(data)  # Write data to the file
+                # print(f"Received {len(data)} bytes from peer at port {port}.")
+                # await asyncio.sleep(0.1)  
 
-        print(f"\nFile '{file_name}' downloaded to '{output_file_path}'.")
+        print(f"\nFile '{file_name}' chunk downloaded from peer {port} to '{output_file_path}'.")
         writer.close()
         await writer.wait_closed()
+
 
 async def connect_to_server(server_port,my_port,speed):
     try:
@@ -429,9 +490,13 @@ async def main():
     # if(directory!="kiran"):
     #     file_name="sai.jpg"
     #     await search_for_file(peer,file_name,peer.port)
-    if(directory!="kiran"):
-        file_name="sai.jpeg"
+    start_time = time.monotonic()
+    if(directory=="dak"):
+        file_name="vid.mp4"
         await peer.search_for_file(file_name)
+    end_time = time.monotonic()
+    total_time = end_time - start_time
+    print(f"Download completed in {total_time:.2f} seconds.")
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
