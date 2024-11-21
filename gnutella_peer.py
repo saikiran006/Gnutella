@@ -31,12 +31,11 @@ class GnutellaPeer:
         self.query_msg_ids=set()
         log_file_path = self.directory+"/output.log"  # Specify your log file path
         self.logger = Logger(log_file_path)
-
-        self.file_server=File_Server(directory=directory)
+        self.logger.write("logging started")
+        self.file_server=File_Server(self.logger,directory=directory)
 
         # Redirect standard output to the logger
-        sys.stdout = self.logger
-        print("logging started")
+        # sys.stdout = self.logger
 
     def read_files_in_directory(self):
         for filename in os.listdir(self.directory):
@@ -49,7 +48,7 @@ class GnutellaPeer:
     
     async def start_file_server(self):
         await self.file_server.start_server()
-        print("File Server Started on",self.file_server.port)
+        self.logger.write("File Server Started on",self.file_server.port)
 
     def set_connection_limits(self):
         """ Set min and max connections based on speed. """
@@ -71,13 +70,13 @@ class GnutellaPeer:
 
     def print_connected_peers(self):
         """ Print currently connected peers. """
-        print("Currently connected peers:")
+        self.logger.write("Currently connected peers:")
         for peer in self.peers.values():
-            print(str(peer.peer_port))
+            self.logger.write(str(peer.peer_port))
 
     async def start_server(self):
         server = await asyncio.start_server(self.handle_connection, '127.0.0.1', self.port)
-        print(f"Serving on {server.sockets[0].getsockname()}")
+        self.logger.write(f"Serving on {server.sockets[0].getsockname()}")
         async with server:
             await server.serve_forever()
 
@@ -91,17 +90,16 @@ class GnutellaPeer:
         if initial_peers:
             # Get the last peer from the list
             last_peer = initial_peers[-1]
-            port = last_peer
             
             # Connect only to the last peer
-            await self.connect_to_peer(port)
-            await self.send_message(port, "SYN", "Hello, Peer!", ttl=5)
+            await self.connect_to_peer(last_peer)
+            await self.send_message(last_peer, "SYN", "Hello, Peer!", ttl=5)
     
     async def connect_to_peer(self, port):
         """Connects to a peer and handles communication."""
         try:
             reader, writer = await asyncio.open_connection(HOST, port)
-            print(f"Connected to peer at {HOST}:{port}")
+            self.logger.write(f"Connected to peer at {HOST}:{port}")
 
             # Store the peer in the dictionary
             self.peers[port] = Peer(port, self.speed, reader, writer)
@@ -112,13 +110,13 @@ class GnutellaPeer:
             asyncio.create_task(self.communicate_with_peer(port))
 
         except ConnectionRefusedError:
-            print(f"Failed to connect to {port}")
+            self.logger.write(f"Failed to connect to {port}")
             return None, None  # Return None if connection fails
         except asyncio.CancelledError:
-            print(f"Connection to {port} cancelled")
+            self.logger.write(f"Connection to {port} cancelled")
             return None, None  # Return None on cancellation
         except Exception as e:
-            print(f"Error during communication with {port}: {e}")
+            self.logger.write(f"Error during communication with {port}: {e}")
             return None, None  # Return None on other errors
     
     async def communicate_with_peer(self, port):
@@ -126,7 +124,7 @@ class GnutellaPeer:
         peer = self.peers.get(port)
 
         if not peer:
-            print(f"Peer {port} not found.")
+            self.logger.write(f"Peer {port} not found.")
             return
 
         try:
@@ -138,7 +136,7 @@ class GnutellaPeer:
                         serialized_msg = msg_obj.to_json().encode()
                         peer.writer.write(serialized_msg + b'\n')
                         await peer.writer.drain()
-                        print(f"Sent message to {port}: {msg_obj}")
+                        self.logger.write(f"Sent message to {port}: {msg_obj}")
 
                         if msg_obj.message_type == "ACK":
                             continue
@@ -149,7 +147,7 @@ class GnutellaPeer:
                             json_message = data.decode().strip()
                             try:
                                 received_msg = Message.from_json(json_message)
-                                print(f"Received from {port}: {received_msg}")
+                                self.logger.write(f"Received from {port}: {received_msg}")
 
                                 # Notify the response future
                                 if port in self.response_futures and self.response_futures[port]:
@@ -158,19 +156,19 @@ class GnutellaPeer:
                                         response_future.set_result(received_msg)
 
                             except json.JSONDecodeError:
-                                print(f"Invalid message format from {port}")
+                                self.logger.write(f"Invalid message format from {port}")
                     else:
-                        print(f"Peer {port} writer not available.")
+                        self.logger.write(f"Peer {port} writer not available.")
 
                 await asyncio.sleep(1)
 
         except Exception as e:
-            print(f"Error in communication with peer {port}: {e}")
+            self.logger.write(f"Error in communication with peer {port}: {e}")
     
     async def handle_connection(self, reader, writer):
         addr = writer.get_extra_info('peername')
         port = addr[1]  # Extract the port number from the address
-        print(f"Connected to port: {port}")  # Logging the port number only
+        self.logger.write(f"Connected to port: {port}")  # Logging the port number only
         # self.peers[port] = Peer(port, self.speed, reader, writer)  # Store using port number
 
         try:
@@ -180,11 +178,11 @@ class GnutellaPeer:
                     break  # Connection closed by the peer
 
                 json_message = data.decode().strip()
-                print(f"Received raw data from port {port}: {json_message}")  # Log raw data received
+                self.logger.write(f"Received raw data from port {port}: {json_message}")  # Log raw data received
                 response_message = None
                 try:
                     received_msg = Message.from_json(json_message)
-                    # print(f"Received from port {port}: {received_msg}")
+                    # self.logger.write(f"Received from port {port}: {received_msg}")
                     if received_msg.message_type == "SYN":
                         await self.connect_to_peer(received_msg.port)
                         msg_obj = Message(message_id=self.get_message_id(),message_type="ACK", message="Connected Successfully", ttl=1, port=self.port)
@@ -192,34 +190,34 @@ class GnutellaPeer:
                     elif received_msg.message_type == "Query":
                         response_message = await self.handle_query(received_msg)
                     else:
-                        print(f"Unknown message type: {received_msg.message_type}")  # Log unknown message types
+                        self.logger.write(f"Unknown message type: {received_msg.message_type}")  # Log unknown message types
                 except json.JSONDecodeError:
-                    print(f"Invalid message format from port {port}: {json_message}")  # More detailed error logging
+                    self.logger.write(f"Invalid message format from port {port}: {json_message}")  # More detailed error logging
                 except Exception as e:
-                    print(f"An error occurred: {e}")                    
+                    self.logger.write(f"An error occurred: {e}")                    
 
                 if response_message:
                     writer.write(response_message + b'\n')  # Ensure response_message is encoded properly
                     await writer.drain()
 
         except asyncio.CancelledError:
-            print(f"Connection to port {port} closed")
+            self.logger.write(f"Connection to port {port} closed")
         except Exception as e:
-            print(f"Exception in handle_connection {e}")
+            self.logger.write(f"Exception in handle_connection {e}")
         finally:
             writer.close()
             await writer.wait_closed()
             del self.peers[port]  # Remove the peer from the dictionary using the port
         
     async def handle_query(self, received_msg):
-        print(f"In handle_query: Received message {received_msg}")
+        self.logger.write(f"In handle_query: Received message {received_msg}")
         msg_id = received_msg.message_id
         file_name = received_msg.message
         TTL = received_msg.ttl
 
         # Check if we've already processed this message
         if msg_id in self.query_msg_ids:
-            print(f"Message {msg_id} already processed. Sending QueryFAIL.")
+            self.logger.write(f"Message {msg_id} already processed. Sending QueryFAIL.")
             msg_obj = Message(
                 message_id=self.get_message_id(),
                 message_type="QueryFAIL",
@@ -236,13 +234,13 @@ class GnutellaPeer:
 
         # Check if the file exists locally
         if file_name in self.files:
-            print("File found locally.")
+            self.logger.write("File found locally.")
             peer_fs_ports.append(self.file_server.port)
             file_path = os.path.join(self.directory, file_name)
             file_size = os.stat(file_path).st_size
-            print(f"Local file size: {file_size} bytes")
+            self.logger.write(f"Local file size: {file_size} bytes")
         else:
-            print(f"File '{file_name}' not found locally. TTL remaining: {TTL}")
+            self.logger.write(f"File '{file_name}' not found locally. TTL remaining: {TTL}")
 
         # Forward the query if TTL > 1
         if TTL > 1:
@@ -250,7 +248,7 @@ class GnutellaPeer:
             for peer_address in self.peers.keys():
                 if(peer_address == received_msg.port):
                     continue
-                print(f"Forwarding query for '{file_name}' to peer {peer_address} with TTL={new_ttl}")
+                self.logger.write(f"Forwarding query for '{file_name}' to peer {peer_address} with TTL={new_ttl}")
                 response = await self.send_message(peer_address, "Query", file_name, new_ttl, message_id=msg_id)
 
                 # Collect file server ports from peers with QueryHIT responses
@@ -261,7 +259,7 @@ class GnutellaPeer:
 
         # Return QueryHIT if any file server has the file
         if peer_fs_ports:
-            print(f"File '{file_name}' found on peers: {peer_fs_ports}")
+            self.logger.write(f"File '{file_name}' found on peers: {peer_fs_ports}")
             msg_obj = Message(
                 message_id=self.get_message_id(),
                 message_type="QueryHIT",
@@ -274,7 +272,7 @@ class GnutellaPeer:
             return msg_obj.to_json().encode()
         else:
             # No file found in network
-            print(f"File '{file_name}' not found in the network.")
+            self.logger.write(f"File '{file_name}' not found in the network.")
             msg_obj = Message(
                 message_id=self.get_message_id(),
                 message_type="QueryFAIL",
@@ -293,7 +291,7 @@ class GnutellaPeer:
         if port not in self.messages:
             self.messages[port] = []
         self.messages[port].append(msg_obj)
-        print(f"Added message for {port}: {msg_obj}")
+        self.logger.write(f"Added message for {port}: {msg_obj}")
         
         # Create a future and store it so the `communicate_with_peer` can set it
         response_future = asyncio.Future()
@@ -306,14 +304,36 @@ class GnutellaPeer:
         return response
     
     async def search_for_file(self, file_name):
+        successful_responses = []
         for peer_port in self.peers.keys():
-            msg_obj = await self.send_message(peer_port, "Query", file_name, 5)
-            if msg_obj.message_type == "QueryHIT":
-                print(f"Query to {peer_port} successful {msg_obj}")
-                await self.parallel_download(file_name, msg_obj.file_server_ports, msg_obj.file_size)
-                break
-            else:
-                print(f"Query to {peer_port} unsuccessful {msg_obj}")
+            try:
+                msg_obj = await self.send_message(peer_port, "Query", file_name, 5)
+                if msg_obj.message_type == "QueryHIT":
+                    self.logger.write(f"Query to {peer_port} successful: {msg_obj}")
+                    successful_responses.append((msg_obj.file_server_ports, msg_obj.file_size))
+                else:
+                    self.logger.write(f"Query to {peer_port} unsuccessful: {msg_obj}")
+            except Exception as e:
+                self.logger.write(f"Error querying peer {peer_port}: {e}")
+
+        if successful_responses:
+            self.logger.write(f"Found file '{file_name}' on {len(successful_responses)} peers. Starting parallel downloads.")
+            
+            # Combine all available file server ports and download
+            file_server_ports = []
+            file_size = 0
+            for ports, size in successful_responses:
+                file_server_ports.extend(ports)
+                file_size = size  # Assuming all responses have the same file size
+
+            await self.parallel_download(file_name, file_server_ports, file_size)
+            self.logger.write(f"Download of '{file_name}' complete!")
+            self.files.append(file_name)
+            return f"Success: File '{file_name}' downloaded from {len(file_server_ports)} peers."
+        else:
+            self.logger.write(f"File '{file_name}' not found on any peers.")
+            return f"Failure: File '{file_name}' not found in the network."
+
 
     async def parallel_download(self, file_name, file_server_ports, file_size):
         download_tasks = []
@@ -338,7 +358,7 @@ class GnutellaPeer:
 
     async def download_chunk(self, file_name, port, chunk_start, chunk_end):
         # Create output directory if it doesn't exist
-        print("fileName ", file_name)
+        self.logger.write("fileName ", file_name)
         if not os.path.exists(self.directory):
             os.makedirs(self.directory)
 
@@ -363,6 +383,6 @@ class GnutellaPeer:
                 # print(f"Received {len(data)} bytes from peer at port {port}.")
                 # await asyncio.sleep(0.1)  
 
-        print(f"\nFile '{file_name}' chunk downloaded from peer {port} to '{output_file_path}'.")
+        self.logger.write(f"\nFile '{file_name}' chunk downloaded from peer {port} to '{output_file_path}'.")
         writer.close()
         await writer.wait_closed()

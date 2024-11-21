@@ -3,7 +3,8 @@ import os
 import socket
 
 class File_Server:
-    def __init__(self, host='localhost', directory='shared_files'):
+    def __init__(self,logger, host='localhost', directory='shared_files'):
+        self.logger=logger
         self.host = host
         self.port = self.get_random_port()
         self.directory = directory
@@ -20,7 +21,7 @@ class File_Server:
 
     async def handle_client(self, reader, writer):
         addr = writer.get_extra_info('peername')
-        print(f"Connection from {addr} has been established.")
+        self.logger.write(f"Connection from {addr} has been established.")
         
         # Receive the request message which includes file name, chunk start, and chunk end
         request_msg = await reader.read(1024)  # Read up to 1024 bytes
@@ -33,7 +34,7 @@ class File_Server:
         # Construct full path
         full_path = os.path.join(self.directory, file_name)
         
-        print(f"Client requested file: {file_name} from byte {chunk_start} to {chunk_end}")
+        self.logger.write(f"Client requested file: {file_name} from byte {chunk_start} to {chunk_end}")
         
         if os.path.exists(full_path) and os.path.isfile(full_path):
             # Send file chunk in the requested range
@@ -42,7 +43,7 @@ class File_Server:
             writer.write(f"File '{file_name}' not found in directory '{self.directory}'.\n".encode())
             await writer.drain()
         
-        print(f"Closing connection with {addr}.")
+        self.logger.write(f"Closing connection with {addr}.")
         writer.close()
         await writer.wait_closed()
 
@@ -59,10 +60,10 @@ class File_Server:
                 if data:
                     writer.write(data)  # Send the chunk to the client
                     await writer.drain()  # Ensure the data is sent
-                    print(f"Sent {len(data)} bytes of {os.path.basename(filepath)} from byte {offset} to {offset + len(data)}.")
+                    self.logger.write(f"Sent {len(data)} bytes of {os.path.basename(filepath)} from byte {offset} to {offset + len(data)}.")
                     offset += len(data)  # Update the offset by the number of bytes sent
                 else:
-                    print(f"No data to send for the chunk from {offset} to {chunk_end}.")
+                    self.logger.write(f"No data to send for the chunk from {offset} to {chunk_end}.")
                     break  # No more data to send, exit the loop
 
 
@@ -70,7 +71,7 @@ class File_Server:
         server = await asyncio.start_server(
             self.handle_client, self.host, self.port)
         
-        print(f"File Sharing Server started on port: {self.port}")
+        self.logger.write(f"File Sharing Server started on port: {self.port}")
 
         async with server:
             await server.serve_forever()

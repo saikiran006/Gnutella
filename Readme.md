@@ -1,4 +1,4 @@
-### 
+###
 
 ``` bash
 pip install asyncio
@@ -14,5 +14,5 @@ python server.py
 ### Run Peer
 
 ``` bash
-python .\peer.py <directory> -s <speed> -p <port> 
+python .\main.py <directory> -s <speed> -p <port> 
 ```

@@ -4,6 +4,7 @@ import os
 import time
 from gnutella_peer import GnutellaPeer
 from logger import Logger
+import aioconsole
 
 HOST = "127.0.0.1"
 
@@ -49,6 +50,40 @@ def setup_directory(directory):
             pass  # Ensure the file is created
 
 
+# Handle user input asynchronously
+async def handle_user_input(peer):
+    while True:
+        file_name = await aioconsole.ainput("Enter the file name you want to download (or type 'exit' to quit): ")
+        if file_name.lower() == 'exit':
+            print("Shutting down...")
+            break
+
+        try:
+            start_time = time.monotonic()
+            response = await peer.search_for_file(file_name)
+            end_time = time.monotonic()
+            total_time = end_time - start_time
+            print(f"Request completed in {total_time:.2f} seconds.")
+            print(f"Response: {response}")
+        except Exception as e:
+            print(f"Error during file search: {e}")
+
+
+# Run asynchronous tasks safely
+async def run_task(task, name):
+    try:
+        await task
+    except Exception as e:
+        print(f"Error in {name}: {e}")
+
+
+# Monitor active tasks for debugging
+async def monitor_tasks():
+    while True:
+        print(f"Active tasks: {len(asyncio.all_tasks())}")
+        await asyncio.sleep(5)
+
+
 # Main function to run the program
 async def main():
     args = sys.argv[1:]
@@ -84,8 +119,8 @@ async def main():
     peer = GnutellaPeer(port, speed, directory)
 
     # Start server and file server asynchronously
-    asyncio.create_task(peer.start_server())
-    asyncio.create_task(peer.start_file_server())
+    asyncio.create_task(run_task(peer.start_server(), "start_server"))
+    asyncio.create_task(run_task(peer.start_file_server(), "start_file_server"))
 
     # Bootstrap server configuration
     bootstrap_port = 9000  # Example bootstrap server port
@@ -96,18 +131,14 @@ async def main():
         print("Available peers:", available_peers)
         await peer.connect_to_initial_peers(available_peers)
         peer.print_connected_peers()  # Print connected peers after connecting
-
-        # Take file name input from the user
-        file_name = input("Enter the file name you want to download: ")
-
-        # Search for the file and download it
-        start_time = time.monotonic()
-        await peer.search_for_file(file_name)
-        end_time = time.monotonic()
-        total_time = end_time - start_time
-        print(f"Download completed in {total_time:.2f} seconds.")
     else:
         print("No available peers found.")
+
+    # Start user input handling
+    asyncio.create_task(handle_user_input(peer))
+
+    # Start task monitoring for debugging
+    # asyncio.create_task(monitor_tasks())
 
     # Keep the event loop running
     await asyncio.Event().wait()

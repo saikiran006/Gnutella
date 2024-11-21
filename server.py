@@ -12,7 +12,7 @@ async def handle_client(reader, writer):
     try:
         data = data.decode().strip()
         speed, port = map(int, data.split(':'))
-        active_peers[port] = speed 
+        active_peers[port] = speed
         print(f"Received speed and port from {peer_addr}: Speed={speed}, Port={port}")
     except ValueError:
         # Handle invalid data format
