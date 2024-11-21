@@ -7,9 +7,10 @@ class Logger:
             print(f"Error opening log file {log_file}: {e}")
             sys.exit(1)  # Exit if the file cannot be opened
 
-    def write(self, message):
+    def write(self, *args, sep=" ", end="\n"):
         try:
-            # Write to the log file only
+            # Combine arguments like `print` does
+            message = sep.join(map(str, args)) + end
             self.log.write(message)
             self.log.flush()  # Ensure it writes to the file in real time
         except IOError as e:

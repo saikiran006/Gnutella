@@ -81,19 +81,13 @@ class GnutellaPeer:
             await server.serve_forever()
 
     async def connect_to_initial_peers(self, initial_peers):
-        """ Connect to a random selection of initial peers based on connection limits. """
-        # connections_needed = random.randint(MIN_CONNS, MAX_CONNS)
-        # selected_peers = random.sample(initial_peers, min(connections_needed, len(initial_peers)))
-
-        # for host, port in selected_peers:
-        #     await self.connect_to_peer(host, port)
+        """ Connect to all initial peers based on the provided list. """
         if initial_peers:
-            # Get the last peer from the list
-            last_peer = initial_peers[-1]
-            
-            # Connect only to the last peer
-            await self.connect_to_peer(last_peer)
-            await self.send_message(last_peer, "SYN", "Hello, Peer!", ttl=5)
+            for peer in initial_peers:
+                # Connect to each peer in the initial_peers list
+                await self.connect_to_peer(peer)
+                await self.send_message(peer, "SYN", "Hello, Peer!", ttl=5)
+                print(f"Connected to peer: {peer}")
     
     async def connect_to_peer(self, port):
         """Connects to a peer and handles communication."""
@@ -214,7 +208,8 @@ class GnutellaPeer:
         msg_id = received_msg.message_id
         file_name = received_msg.message
         TTL = received_msg.ttl
-
+        print("recvd msg id", msg_id)
+        print("msg_ids saved", self.query_msg_ids)
         # Check if we've already processed this message
         if msg_id in self.query_msg_ids:
             self.logger.write(f"Message {msg_id} already processed. Sending QueryFAIL.")
@@ -258,7 +253,7 @@ class GnutellaPeer:
                     peer_fs_ports.extend(response.file_server_ports)
 
         # Return QueryHIT if any file server has the file
-        if peer_fs_ports:
+        if len(peer_fs_ports)>0:
             self.logger.write(f"File '{file_name}' found on peers: {peer_fs_ports}")
             msg_obj = Message(
                 message_id=self.get_message_id(),
@@ -286,6 +281,8 @@ class GnutellaPeer:
         """ Add a structured message to the queue for a specific peer. """
         if message_id is None:
             message_id = self.get_message_id()
+            if(message_type is "Query"):
+                self.query_msg_ids.add(message_id)
         msg_obj = Message(message_id=message_id, message_type=message_type, message=message, ttl=ttl, port=self.port)
         
         if port not in self.messages:

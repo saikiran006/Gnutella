@@ -9,14 +9,16 @@ import aioconsole
 HOST = "127.0.0.1"
 
 # Connect to the server and get peer list
-async def connect_to_server(server_port, my_port, speed):
+async def connect_to_server(server_port, my_port, bandwidth, cpu, ram):
     try:
         reader, writer = await asyncio.open_connection(HOST, server_port)
         print(f"Connected to bootstrap server at {HOST}:{server_port}")
 
-        # Send speed and port to the bootstrap server
-        writer.write(f"{speed}:{my_port}\n".encode())
+        # In peer code: Before sending data
+        print(f"Sending data to server: {bandwidth}:{cpu}:{ram}:{my_port}:{server_port}")
+        writer.write(f"{bandwidth}:{cpu}:{ram}:{my_port}:{server_port}\n".encode())
         await writer.drain()
+
 
         # Receive list of peers
         data = await reader.read(4096)
@@ -91,18 +93,31 @@ async def main():
     # Variables to store parsed command line arguments
     target_port = None
     directory = None
-    speed = 100  # Default speed
-
+    bandwidth = None
+    cpu = None
+    ram = None
     # Parsing command line arguments
-    has_speed = False
+    has_bandwidth = False
+    has_cpu = False
+    has_ram = False
     has_port = False
 
     for arg in args:
-        if arg == "-s":
-            has_speed = True
-        elif has_speed:
-            speed = int(arg)
-            has_speed = False
+        if arg == "-b":
+            has_bandwidth = True
+        elif has_bandwidth:
+            bandwidth = int(arg)
+            has_bandwidth = False
+        elif arg == "-c":
+            has_cpu = True
+        elif has_cpu:
+            cpu = int(arg)
+            has_cpu = False
+        elif arg == "-r":
+            has_ram = True
+        elif has_ram:
+            ram = int(arg)
+            has_ram = False
         elif arg == "-p":
             has_port = True
         elif has_port:
@@ -116,7 +131,7 @@ async def main():
 
     # Default port if not provided
     port = target_port if target_port else 12345
-    peer = GnutellaPeer(port, speed, directory)
+    peer = GnutellaPeer(port, bandwidth, directory)
 
     # Start server and file server asynchronously
     asyncio.create_task(run_task(peer.start_server(), "start_server"))
@@ -126,7 +141,7 @@ async def main():
     bootstrap_port = 9000  # Example bootstrap server port
 
     # Connect to bootstrap server and retrieve available peers
-    available_peers = await connect_to_server(bootstrap_port, port, speed)
+    available_peers = await connect_to_server(bootstrap_port, port, bandwidth, cpu, ram)
     if available_peers:
         print("Available peers:", available_peers)
         await peer.connect_to_initial_peers(available_peers)
