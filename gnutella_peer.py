@@ -412,7 +412,7 @@ class GnutellaPeer:
         # Open a file to write the downloaded content
         with open(output_file_path, 'wb') as output_file:
             output_file.seek(chunk_start)
-            msg_size=32*1024
+            msg_size=45*1024
             while True:
                 data = await reader.read(msg_size)  # Read in chunks
                 if not data:

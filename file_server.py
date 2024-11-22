@@ -39,7 +39,7 @@ class File_Server:
         
         if os.path.exists(full_path) and os.path.isfile(full_path):
             # Send file chunk in the requested range
-            await self.send_chunk(writer, full_path, chunk_start, chunk_end, 32*1024)
+            await self.send_chunk(writer, full_path, chunk_start, chunk_end, 45*1024)
         else:
             writer.write(f"File '{file_name}' not found in directory '{self.directory}'.\n".encode())
             await writer.drain()
