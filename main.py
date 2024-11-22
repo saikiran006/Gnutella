@@ -7,35 +7,39 @@ from logger import Logger
 import aioconsole
 
 HOST = "127.0.0.1"
-
+SERVER_PORT=9000
 # Connect to the server and get peer list
-async def connect_to_server(server_port, my_port, bandwidth, cpu, ram):
+async def connect_to_server(msg, my_port, bandwidth, cpu, ram):
     try:
-        reader, writer = await asyncio.open_connection(HOST, server_port)
-        print(f"Connected to bootstrap server at {HOST}:{server_port}")
+        reader, writer = await asyncio.open_connection(HOST, SERVER_PORT)
+        print(f"Connected to bootstrap server at {HOST}:{SERVER_PORT}")
 
         # In peer code: Before sending data
-        print(f"Sending data to server: {bandwidth}:{cpu}:{ram}:{my_port}:{server_port}")
-        writer.write(f"{bandwidth}:{cpu}:{ram}:{my_port}:{server_port}\n".encode())
+        msg_code=1 #connect
+        if(msg=="exit"):
+            msg_code=0
+        print(f"Sending data to server: {msg_code}:{bandwidth}:{cpu}:{ram}:{my_port}")
+        writer.write(f"{msg_code}:{bandwidth}:{cpu}:{ram}:{my_port}\n".encode())
         await writer.drain()
-
 
         # Receive list of peers
         data = await reader.read(4096)
         writer.close()
         await writer.wait_closed()
+        if msg=="connect":
+            peers_list = data.decode().split(':')
 
-        peers_list = data.decode().splitlines()
+            if not peers_list:
+                print("No peers received from the bootstrap server.")
+                return []
 
-        if not peers_list:
-            print("No peers received from the bootstrap server.")
-            return []
-
-        print(f"Received list of peers from the bootstrap server: {peers_list}")
-        return [int(peer) for peer in peers_list]
+            print(f"Received list of peers from the bootstrap server: {peers_list}")
+            return [int(peer) for peer in peers_list]
+        else:
+            print(f"Received message: {data}")
 
     except ConnectionRefusedError:
-        print(f"Connection to {HOST}:{server_port} failed")
+        print(f"Connection to {HOST}:{SERVER_PORT} failed")
         return []
     except Exception as e:
         print(f"An error occurred while connecting to the server: {e}")
@@ -57,6 +61,12 @@ async def handle_user_input(peer):
     while True:
         file_name = await aioconsole.ainput("Enter the file name you want to download (or type 'exit' to quit): ")
         if file_name.lower() == 'exit':
+            print("Exiting...")
+            # Graceful shutdown
+            await connect_to_server("exit", peer.port, 0, 0, 0)
+            await peer.disconnect_from_peers()  # Ensure peer disconnection
+            await peer.stop_server()
+            await peer.file_server.stop_server()
             print("Shutting down...")
             break
 
@@ -137,11 +147,9 @@ async def main():
     asyncio.create_task(run_task(peer.start_server(), "start_server"))
     asyncio.create_task(run_task(peer.start_file_server(), "start_file_server"))
 
-    # Bootstrap server configuration
-    bootstrap_port = 9000  # Example bootstrap server port
 
     # Connect to bootstrap server and retrieve available peers
-    available_peers = await connect_to_server(bootstrap_port, port, bandwidth, cpu, ram)
+    available_peers = await connect_to_server("connect", port, bandwidth, cpu, ram)
     if available_peers:
         print("Available peers:", available_peers)
         await peer.connect_to_initial_peers(available_peers)

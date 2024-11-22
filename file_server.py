@@ -3,11 +3,12 @@ import os
 import socket
 
 class File_Server:
-    def __init__(self,logger, host='localhost', directory='shared_files'):
-        self.logger=logger
+    def __init__(self, logger, host='localhost', directory='shared_files'):
+        self.logger = logger
         self.host = host
         self.port = self.get_random_port()
         self.directory = directory
+        self.server = None  # This will hold the server instance to be stopped later
 
         # Ensure the directory exists
         if not os.path.exists(self.directory):
@@ -38,7 +39,7 @@ class File_Server:
         
         if os.path.exists(full_path) and os.path.isfile(full_path):
             # Send file chunk in the requested range
-            await self.send_chunk(writer, full_path, chunk_start, chunk_end)
+            await self.send_chunk(writer, full_path, chunk_start, chunk_end, 32*1024)
         else:
             writer.write(f"File '{file_name}' not found in directory '{self.directory}'.\n".encode())
             await writer.drain()
@@ -66,17 +67,32 @@ class File_Server:
                     self.logger.write(f"No data to send for the chunk from {offset} to {chunk_end}.")
                     break  # No more data to send, exit the loop
 
-
     async def start_server(self):
-        server = await asyncio.start_server(
+        self.server = await asyncio.start_server(
             self.handle_client, self.host, self.port)
         
         self.logger.write(f"File Sharing Server started on port: {self.port}")
 
-        async with server:
-            await server.serve_forever()
+        async with self.server:
+            await self.server.serve_forever()
+
+    async def stop_server(self):
+        """Stop the file server gracefully."""
+        if self.server:
+            self.logger.write(f"Stopping File Sharing Server on port: {self.port}")
+            self.server.close()
+            await self.server.wait_closed()
+            self.logger.write("File Sharing Server stopped.")
+        else:
+            self.logger.write("Server is not running, cannot stop.")
 
 if __name__ == "__main__":
     # Specify the directory for sharing files
     file_sharing_server = File_Server(directory='shared_files')
-    asyncio.run(file_sharing_server.start_server())
+    
+    # Start the server in an event loop
+    try:
+        asyncio.run(file_sharing_server.start_server())
+    except KeyboardInterrupt:
+        # Handle a keyboard interrupt to stop the server
+        asyncio.run(file_sharing_server.stop_server())
